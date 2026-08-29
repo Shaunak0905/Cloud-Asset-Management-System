@@ -1,0 +1,305 @@
+// Prisma schema for the Cloud Asset Management System.
+// Source of truth for table shape: docs/03-database-schema.md
+// Source of truth for RLS policies: docs/04-rls-security-policies.md (applied via raw SQL migration, not expressible here)
+//
+// A few things Prisma's schema language cannot express and which instead live in
+// prisma/migrations/0001_init/migration.sql by hand: the partial unique index
+// (uniq_active_assignment_per_asset), the attachments "exactly one owner" CHECK constraint,
+// the pg_trgm GIN index on assets.name, the next_public_code() counter function, and the
+// pg_cron retention job. See that migration file for all of them.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  ADMIN
+  TECHNICIAN
+  MEMBER
+
+  @@map("user_role")
+}
+
+enum AssetStatus {
+  AVAILABLE
+  IN_USE
+  IN_MAINTENANCE
+  DAMAGED
+  LOST
+  RETIRED
+
+  @@map("asset_status")
+}
+
+enum AssignmentStatus {
+  PENDING
+  ACTIVE
+  RETURNED
+  REJECTED
+  CANCELLED
+
+  @@map("assignment_status")
+}
+
+enum MaintenanceStatus {
+  OPEN
+  ASSIGNED
+  IN_PROGRESS
+  RESOLVED
+  CANCELLED
+
+  @@map("maintenance_status")
+}
+
+enum MaintenancePriority {
+  LOW
+  MEDIUM
+  HIGH
+  CRITICAL
+
+  @@map("maintenance_priority")
+}
+
+model User {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  entraId    String   @unique @map("entra_id")
+  fullName   String   @map("full_name")
+  email      String   @unique
+  role       UserRole @default(MEMBER)
+  department String?
+  phone      String?
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  createdAssets           Asset[]              @relation("AssetCreatedBy")
+  assignments             Assignment[]         @relation("AssignmentUser")
+  approvedAssignments     Assignment[]         @relation("AssignmentApprovedBy")
+  reportedMaintenance     MaintenanceRequest[]  @relation("MaintenanceReportedBy")
+  assignedMaintenance     MaintenanceRequest[]  @relation("MaintenanceAssignedTo")
+  maintenanceHistoryEntries MaintenanceHistory[] @relation("MaintenanceHistoryActor")
+  uploadedAttachments     Attachment[]         @relation("AttachmentUploadedBy")
+  auditLogEntries         AuditLog[]           @relation("AuditLogActor")
+
+  @@map("users")
+}
+
+model Building {
+  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code        String   @unique
+  name        String
+  description String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt   DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  rooms                     Room[]
+  registeredAssets          Asset[]      @relation("AssetRegisteredBuilding")
+  currentUsageAssets        Asset[]      @relation("AssetCurrentUsageBuilding")
+  usageAssignments          Assignment[] @relation("AssignmentUsageBuilding")
+
+  @@map("buildings")
+}
+
+model Room {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  buildingId String   @map("building_id") @db.Uuid
+  code       String
+  name       String
+  floor      Int?
+  isActive   Boolean  @default(true) @map("is_active")
+  createdAt  DateTime @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt  DateTime @updatedAt @map("updated_at") @db.Timestamptz
+
+  building                Building     @relation(fields: [buildingId], references: [id], onDelete: Restrict)
+  registeredAssets        Asset[]      @relation("AssetRegisteredRoom")
+  currentUsageAssets      Asset[]      @relation("AssetCurrentUsageRoom")
+  usageAssignments        Assignment[] @relation("AssignmentUsageRoom")
+
+  @@unique([buildingId, code])
+  @@map("rooms")
+}
+
+model Asset {
+  id                      String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  publicCode              String      @unique @map("public_code")
+  name                    String
+  category                String
+  serialNumber            String?     @map("serial_number")
+  department              String?
+  status                  AssetStatus @default(AVAILABLE)
+
+  registeredBuildingId    String      @map("registered_building_id") @db.Uuid
+  registeredRoomId        String      @map("registered_room_id") @db.Uuid
+  currentUsageBuildingId  String?     @map("current_usage_building_id") @db.Uuid
+  currentUsageRoomId      String?     @map("current_usage_room_id") @db.Uuid
+
+  purchaseDate            DateTime?   @map("purchase_date") @db.Date
+  warrantyUntil           DateTime?   @map("warranty_until") @db.Date
+  description             String?
+  createdBy               String      @map("created_by") @db.Uuid
+
+  retiredAt               DateTime?   @map("retired_at") @db.Timestamptz
+
+  createdAt               DateTime    @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt               DateTime    @updatedAt @map("updated_at") @db.Timestamptz
+
+  registeredBuilding    Building              @relation("AssetRegisteredBuilding", fields: [registeredBuildingId], references: [id], onDelete: Restrict)
+  registeredRoom        Room                  @relation("AssetRegisteredRoom", fields: [registeredRoomId], references: [id], onDelete: Restrict)
+  currentUsageBuilding  Building?             @relation("AssetCurrentUsageBuilding", fields: [currentUsageBuildingId], references: [id], onDelete: SetNull)
+  currentUsageRoom      Room?                 @relation("AssetCurrentUsageRoom", fields: [currentUsageRoomId], references: [id], onDelete: SetNull)
+  creator               User                  @relation("AssetCreatedBy", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  assignments           Assignment[]
+  maintenanceRequests    MaintenanceRequest[]
+  maintenanceHistory     MaintenanceHistory[]
+  attachments            Attachment[]
+
+  @@map("assets")
+}
+
+model Assignment {
+  id                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  assetId                  String?          @map("asset_id") @db.Uuid
+  assetNameSnapshot        String           @map("asset_name_snapshot")
+  assetPublicCodeSnapshot  String           @map("asset_public_code_snapshot")
+
+  userId                   String           @map("user_id") @db.Uuid
+  status                   AssignmentStatus @default(PENDING)
+
+  usageBuildingId          String?          @map("usage_building_id") @db.Uuid
+  usageRoomId              String?          @map("usage_room_id") @db.Uuid
+
+  requestedAt              DateTime         @default(now()) @map("requested_at") @db.Timestamptz
+  approvedAt               DateTime?        @map("approved_at") @db.Timestamptz
+  approvedBy                String?         @map("approved_by") @db.Uuid
+  returnedAt                DateTime?       @map("returned_at") @db.Timestamptz
+
+  notes                     String?
+  createdAt                 DateTime        @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt                 DateTime        @updatedAt @map("updated_at") @db.Timestamptz
+
+  asset          Asset?    @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  user           User      @relation("AssignmentUser", fields: [userId], references: [id], onDelete: Restrict)
+  approver       User?     @relation("AssignmentApprovedBy", fields: [approvedBy], references: [id], onDelete: Restrict)
+  usageBuilding  Building? @relation("AssignmentUsageBuilding", fields: [usageBuildingId], references: [id], onDelete: SetNull)
+  usageRoom      Room?     @relation("AssignmentUsageRoom", fields: [usageRoomId], references: [id], onDelete: SetNull)
+
+  // NOTE: uniq_active_assignment_per_asset (a partial unique index on asset_id WHERE status = 'ACTIVE')
+  // cannot be expressed in Prisma's schema language and is created by raw SQL in the initial migration.
+  @@map("assignments")
+}
+
+model MaintenanceRequest {
+  id              String              @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  requestNumber   String              @unique @map("request_number")
+
+  assetId         String              @map("asset_id") @db.Uuid
+  reportedBy      String              @map("reported_by") @db.Uuid
+  assignedTo      String?             @map("assigned_to") @db.Uuid
+
+  status          MaintenanceStatus   @default(OPEN)
+  priority        MaintenancePriority @default(MEDIUM)
+  description     String
+  resolutionNotes String?             @map("resolution_notes")
+
+  createdAt       DateTime            @default(now()) @map("created_at") @db.Timestamptz
+  updatedAt       DateTime            @updatedAt @map("updated_at") @db.Timestamptz
+  resolvedAt      DateTime?           @map("resolved_at") @db.Timestamptz
+
+  asset      Asset                @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  reporter   User                 @relation("MaintenanceReportedBy", fields: [reportedBy], references: [id], onDelete: Restrict)
+  assignee   User?                @relation("MaintenanceAssignedTo", fields: [assignedTo], references: [id], onDelete: Restrict)
+  history    MaintenanceHistory[]
+  attachments Attachment[]
+
+  @@map("maintenance_requests")
+}
+
+model MaintenanceHistory {
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  maintenanceRequestId      String?  @map("maintenance_request_id") @db.Uuid
+  requestNumberSnapshot     String   @map("request_number_snapshot")
+
+  assetId                   String?  @map("asset_id") @db.Uuid
+  assetNameSnapshot         String   @map("asset_name_snapshot")
+  assetPublicCodeSnapshot   String   @map("asset_public_code_snapshot")
+
+  action                    String
+  actorId                   String   @map("actor_id") @db.Uuid
+  notes                     String?
+
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  maintenanceRequest MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: SetNull)
+  asset               Asset?             @relation(fields: [assetId], references: [id], onDelete: SetNull)
+  actor               User               @relation("MaintenanceHistoryActor", fields: [actorId], references: [id], onDelete: Restrict)
+
+  @@map("maintenance_history")
+}
+
+model Attachment {
+  id                    String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  blobContainer         String   @map("blob_container")
+  blobName              String   @map("blob_name")
+  originalFilename      String   @map("original_filename")
+  mimeType              String   @map("mime_type")
+  fileSizeBytes         BigInt   @map("file_size_bytes")
+
+  uploadedBy            String   @map("uploaded_by") @db.Uuid
+  isPublic               Boolean @default(false) @map("is_public")
+
+  assetId                String? @map("asset_id") @db.Uuid
+  maintenanceRequestId   String? @map("maintenance_request_id") @db.Uuid
+
+  createdAt              DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  uploader            User                @relation("AttachmentUploadedBy", fields: [uploadedBy], references: [id], onDelete: Restrict)
+  asset               Asset?              @relation(fields: [assetId], references: [id], onDelete: Cascade)
+  maintenanceRequest  MaintenanceRequest? @relation(fields: [maintenanceRequestId], references: [id], onDelete: Cascade)
+
+  // NOTE: the "attachments_exactly_one_owner" CHECK constraint (exactly one of assetId/maintenanceRequestId
+  // set) cannot be expressed in Prisma's schema language and is created by raw SQL in the initial migration.
+  @@map("attachments")
+}
+
+model AuditLog {
+  id                        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+
+  entityType                String   @map("entity_type")
+  entityId                  String   @map("entity_id") @db.Uuid
+  entityNameSnapshot        String?  @map("entity_name_snapshot")
+  entityPublicCodeSnapshot  String?  @map("entity_public_code_snapshot")
+
+  action                    String
+  actorId                   String?  @map("actor_id") @db.Uuid
+  actorNameSnapshot         String   @map("actor_name_snapshot")
+
+  metadata                  Json?
+  createdAt                 DateTime @default(now()) @map("created_at") @db.Timestamptz
+
+  actor User? @relation("AuditLogActor", fields: [actorId], references: [id], onDelete: SetNull)
+
+  // NOTE: entity_id is intentionally NOT a foreign key — audit_log is polymorphic across entity
+  // types. Readability after a source row is deleted comes from the snapshot columns above.
+  @@map("audit_log")
+}
+
+// Backs next_public_code() (see prisma/migrations/0001_init/migration.sql) — the concurrency-safe,
+// per-year counter used to generate assets.public_code and maintenance_requests.request_number.
+model IdCounter {
+  entityType String @map("entity_type")
+  year       Int
+  lastValue  Int    @default(0) @map("last_value")
+
+  @@id([entityType, year])
+  @@map("id_counters")
+}
