@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 // docs/03-database-schema.md #10/#19: RETIRED is terminal and starts the
 // 7-day pg_cron purge countdown, so this asks for confirmation rather than
 // being a plain button.
-export function RetireAssetButton({ assetId }: { assetId: string }) {
+export function RetireAssetButton({ publicCode }: { publicCode: string }) {
   const router = useRouter();
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -22,7 +22,7 @@ export function RetireAssetButton({ assetId }: { assetId: string }) {
     setSubmitting(true);
     setError(null);
     try {
-      const res = await fetch(`/api/assets/${assetId}/retire`, { method: "POST" });
+      const res = await fetch(`/api/assets/${publicCode}/retire`, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => null);
         throw new Error(body?.error ?? "Failed to retire asset");

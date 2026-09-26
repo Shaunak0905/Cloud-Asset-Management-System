@@ -8,8 +8,8 @@ import { listBuildingsWithRooms, createBuilding } from "@/lib/data/buildings";
 // may write (docs/04-rls-security-policies.md #7-8).
 export async function GET() {
   try {
-    await requireUser();
-    const buildings = await listBuildingsWithRooms();
+    const user = await requireUser();
+    const buildings = await listBuildingsWithRooms(user);
     return NextResponse.json({ buildings });
   } catch (error) {
     return handleApiError(error);

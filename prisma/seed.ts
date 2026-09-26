@@ -1,8 +1,12 @@
 import { PrismaClient } from "@prisma/client";
 
 // docs/03-database-schema.md #22. Uses upsert on the natural unique key so
-// re-running this is idempotent.
-const prisma = new PrismaClient();
+// re-running this is idempotent. Connects as the owner (DIRECT_DATABASE_URL):
+// the runtime app_user role is subject to RLS, and a seed has no signed-in
+// user to act as.
+const prisma = new PrismaClient({
+  datasourceUrl: process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL,
+});
 
 const BUILDINGS = [
   {

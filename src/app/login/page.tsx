@@ -33,7 +33,12 @@ export default async function LoginPage({
             in with your official college account.
           </p>
         )}
-        {error && error !== "WrongDomain" && (
+        {error === "Inactive" && (
+          <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
+            Your account has been deactivated. Contact an administrator.
+          </p>
+        )}
+        {error && error !== "WrongDomain" && error !== "Inactive" && (
           <p className="mt-3 rounded-lg bg-red-50 px-3 py-2 text-xs font-medium text-red-700 dark:bg-red-950 dark:text-red-300">
             Sign-in failed. Please try again.
           </p>

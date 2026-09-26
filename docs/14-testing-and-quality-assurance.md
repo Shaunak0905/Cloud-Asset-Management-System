@@ -623,7 +623,7 @@ AVAILABLE
 ### Assigned asset
 
 ```text
-ASSIGNED
+IN_USE
 → request
 → rejected
 ```

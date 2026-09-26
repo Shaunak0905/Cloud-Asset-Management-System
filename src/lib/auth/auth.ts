@@ -54,29 +54,30 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
       if (!entraId) return token;
 
-      let user = await prisma.user.findUnique({ where: { entraId } });
-
-      if (!user) {
-        user = await prisma.user.create({
-          data: {
-            entraId,
-            fullName: (profile?.name as string | undefined) ?? "Unknown",
-            email:
-              (profile?.email as string | undefined) ??
-              `${entraId}@unresolved.local`,
-            role: "MEMBER",
-          },
-        });
-      }
+      // Runs on every session read, so role/deactivation changes take effect
+      // on the next request rather than at next sign-in. Goes through the
+      // app_login_user() SECURITY DEFINER function rather than plain Prisma
+      // because this happens before any RLS identity exists, and `users` has
+      // no INSERT policy (prisma/migrations/0002_*, docs/04 #6a).
+      const [user] = await prisma.$queryRaw<
+        { id: string; full_name: string; email: string; role: AppRole; is_active: boolean }[]
+      >`
+        SELECT * FROM app_login_user(
+          ${entraId},
+          ${(profile?.name as string | undefined) ?? token.name ?? "Unknown"},
+          ${(profile?.email as string | undefined) ?? token.email ?? `${entraId}@unresolved.local`}
+        )
+      `;
+      if (!user) return token;
 
       token.entraId = entraId;
       token.userId = user.id;
-      token.role = user.role as AppRole;
-      token.isActive = user.isActive;
+      token.role = user.role;
+      token.isActive = user.is_active;
       // We overrode the default jwt callback entirely, so name/email have to
       // be set explicitly here too (from our own `users` row, the actual
       // profile source of truth) for them to reach session.user below.
-      token.name = user.fullName;
+      token.name = user.full_name;
       token.email = user.email;
       return token;
     },

@@ -34,12 +34,12 @@ const EMPTY_VALUES: AssetFormValues = {
 
 export function AssetForm({
   mode,
-  assetId,
+  publicCode,
   initialValues,
   buildings,
 }: {
   mode: "create" | "edit";
-  assetId?: string;
+  publicCode?: string;
   initialValues?: Partial<AssetFormValues>;
   buildings: BuildingOption[];
 }) {
@@ -73,7 +73,7 @@ export function AssetForm({
     };
 
     try {
-      const url = mode === "create" ? "/api/assets" : `/api/assets/${assetId}`;
+      const url = mode === "create" ? "/api/assets" : `/api/assets/${publicCode}`;
       const res = await fetch(url, {
         method: mode === "create" ? "POST" : "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -84,7 +84,7 @@ export function AssetForm({
         throw new Error(body?.error ?? "Failed to save asset");
       }
       const { asset } = await res.json();
-      router.push(`/admin/assets/${asset.id}/edit`);
+      router.push(`/admin/assets/${asset.publicCode}/edit`);
       router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to save asset");

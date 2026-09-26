@@ -95,21 +95,22 @@ Never paste secrets into Claude Code chat.
 
 # 4. Local Environment
 
-Claude Code should generate `.env.example` containing variable names only.
-
-Example categories:
+`.env.example` in the repo root is the source of truth for variable names, with a comment on each. The groups are:
 
 ```text
-NEXT_PUBLIC_APP_URL
-DATABASE_URL              # Postgres connection string (Prisma)
-AZURE_STORAGE_ACCOUNT_NAME
-AZURE_STORAGE_CONTAINER_NAME   # single "attachments" container
-ENTRA_TENANT_ID
-ENTRA_CLIENT_ID
-ENTRA_CLIENT_SECRET   # only where the selected auth flow actually requires one
+DATABASE_URL                        # runtime, as the RLS-subject app_user role
+DIRECT_DATABASE_URL                 # server admin — migrations + seed only
+AUTH_SECRET, AUTH_URL               # Auth.js
+AUTH_MICROSOFT_ENTRA_ID_ID/_SECRET/_ISSUER   # Entra ID app registration
+AUTH_ALLOWED_EMAIL_DOMAIN           # optional college-domain gate
+AZURE_STORAGE_CONNECTION_STRING, AZURE_STORAGE_ATTACHMENTS_CONTAINER
+NEXT_PUBLIC_APP_URL                 # base URL encoded into QR codes
+APP_TIME_ZONE                       # display timezone for server-rendered times
 ```
 
-The exact variables must match the implementation.
+Two database connection strings are intentional — see `04-rls-security-policies.md` §6. Pointing `DATABASE_URL` at the server admin would work but silently bypass every RLS policy.
+
+`NEXT_PUBLIC_APP_URL` must be the real production origin before any QR sticker is printed: it's baked into the printed code and can't be changed afterward.
 
 `.env.local` and secret-bearing files must be gitignored.
 
@@ -178,6 +179,18 @@ Before production setup, verify:
 - Automated backup settings (see Section 7A)
 
 Claude Code may generate the Prisma schema, migration files, and the `pg_cron` job SQL, but the human developer provisions the server and applies migrations against it.
+
+## 7.1 First-time database setup, in order
+
+1. **Server parameters** (Azure Portal → the server → *Server parameters*):
+   - `azure.extensions`: allow-list `PGCRYPTO`, `PG_TRGM`, and `PG_CRON`. Flexible Server rejects `CREATE EXTENSION` for anything not on this list — all three are used by the first migration.
+   - `shared_preload_libraries`: add `pg_cron` (the server restarts to apply it).
+   - `cron.database_name`: set to the app's database name (e.g. `cams`). pg_cron can only schedule jobs from this database; left at the default (`postgres`), the migration's `cron.schedule(...)` fails.
+2. **Create the app database** (e.g. `cams`) and put the admin connection string in `DIRECT_DATABASE_URL`.
+3. **Apply migrations:** `npm run db:migrate` (uses `DIRECT_DATABASE_URL`). This creates the `app_user` role.
+4. **Give `app_user` a password**, connected as the admin: `ALTER ROLE app_user PASSWORD '<strong password>';` — then put it in `DATABASE_URL`. Store it as an app setting in Azure; never commit it.
+5. **Seed** (optional): `npm run db:seed`.
+6. **Make yourself an admin** after your first sign-in (everyone starts as `MEMBER`): `UPDATE users SET role = 'ADMIN' WHERE email = '<you>';`, connected as the admin.
 
 ---
 

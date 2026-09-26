@@ -416,7 +416,7 @@ Primary statuses:
 
 ```text
 AVAILABLE
-ASSIGNED
+IN_USE
 IN_MAINTENANCE
 LOST
 DAMAGED
@@ -879,7 +879,7 @@ Selects Room filtered by Building
       ↓
 Assignment is created
       ↓
-Asset becomes ASSIGNED
+Asset becomes IN_USE
       ↓
 Member reports problem
       ↓

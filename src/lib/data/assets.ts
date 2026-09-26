@@ -1,47 +1,92 @@
 import type { AssetStatus, Prisma } from "@prisma/client";
-import { prisma } from "@/lib/db/prisma";
 import { withRlsContext } from "@/lib/db/rls";
 import { writeAuditLog } from "@/lib/data/audit";
+import { DomainError } from "@/lib/api/errors";
 import type { CurrentUser } from "@/lib/auth/session";
-import type { AssetCreateInput, AssetUpdateInput } from "@/lib/validation/assets";
+import type {
+  AssetCreateInput,
+  AssetListQuery,
+  AssetUpdateInput,
+} from "@/lib/validation/assets";
+
+// Every query runs inside withRlsContext — see the note in buildings.ts.
+// Assets are addressed by publicCode everywhere outside this file: the
+// internal UUID is never put in a URL (docs/03-database-schema.md #9).
 
 const ASSET_INCLUDE = {
   registeredBuilding: true,
   registeredRoom: true,
+  currentUsageBuilding: true,
+  currentUsageRoom: true,
 } satisfies Prisma.AssetInclude;
 
-export type ListAssetsParams = {
-  page?: number;
-  pageSize?: number;
-  status?: AssetStatus;
-  q?: string;
-};
+export const ASSET_PAGE_SIZE = 20;
 
-export async function listAssets(params: ListAssetsParams = {}) {
-  const page = Math.max(1, params.page ?? 1);
-  const pageSize = Math.min(100, Math.max(1, params.pageSize ?? 25));
+function buildAssetWhere(
+  query: AssetListQuery,
+  opts: { hideRetired?: boolean },
+): Prisma.AssetWhereInput {
+  const where: Prisma.AssetWhereInput = {};
 
-  const where: Prisma.AssetWhereInput = {
-    ...(params.status ? { status: params.status } : {}),
-    ...(params.q ? { name: { contains: params.q, mode: "insensitive" } } : {}),
-  };
+  if (query.status) where.status = query.status;
+  else if (opts.hideRetired) where.status = { not: "RETIRED" };
 
-  const [items, total] = await Promise.all([
-    prisma.asset.findMany({
+  if (query.category) where.category = query.category;
+  if (query.department) where.department = query.department;
+  if (query.buildingId) where.registeredBuildingId = query.buildingId;
+
+  // Free-text search over name (trigram-indexed, docs/03 #21), public code and
+  // serial number (docs/06-asset-management.md #24).
+  if (query.q) {
+    where.OR = [
+      { name: { contains: query.q, mode: "insensitive" } },
+      { publicCode: { contains: query.q, mode: "insensitive" } },
+      { serialNumber: { contains: query.q, mode: "insensitive" } },
+    ];
+  }
+
+  return where;
+}
+
+export async function listAssets(
+  actor: CurrentUser,
+  query: AssetListQuery,
+  opts: { hideRetired?: boolean } = {},
+) {
+  const page = query.page ?? 1;
+  const where = buildAssetWhere(query, opts);
+
+  return withRlsContext(actor.id, actor.role, async (tx) => {
+    // Sequential, not Promise.all: both run on the one transaction connection.
+    const items = await tx.asset.findMany({
       where,
       include: ASSET_INCLUDE,
       orderBy: { createdAt: "desc" },
-      skip: (page - 1) * pageSize,
-      take: pageSize,
-    }),
-    prisma.asset.count({ where }),
-  ]);
-
-  return { items, total, page, pageSize };
+      skip: (page - 1) * ASSET_PAGE_SIZE,
+      take: ASSET_PAGE_SIZE,
+    });
+    const total = await tx.asset.count({ where });
+    return { items, total, page, pageSize: ASSET_PAGE_SIZE };
+  });
 }
 
-export async function getAssetById(id: string) {
-  return prisma.asset.findUnique({ where: { id }, include: ASSET_INCLUDE });
+/** Distinct departments in use, for the department filter dropdown. */
+export async function listAssetDepartments(actor: CurrentUser): Promise<string[]> {
+  return withRlsContext(actor.id, actor.role, async (tx) => {
+    const rows = await tx.asset.findMany({
+      where: { department: { not: null } },
+      distinct: ["department"],
+      select: { department: true },
+      orderBy: { department: "asc" },
+    });
+    return rows.map((r) => r.department).filter((d): d is string => !!d);
+  });
+}
+
+export async function getAssetByPublicCode(actor: CurrentUser, publicCode: string) {
+  return withRlsContext(actor.id, actor.role, (tx) =>
+    tx.asset.findUnique({ where: { publicCode }, include: ASSET_INCLUDE }),
+  );
 }
 
 export async function createAsset(actor: CurrentUser, input: AssetCreateInput) {
@@ -83,18 +128,19 @@ export async function createAsset(actor: CurrentUser, input: AssetCreateInput) {
 
 export async function updateAsset(
   actor: CurrentUser,
-  id: string,
+  publicCode: string,
   input: AssetUpdateInput,
 ) {
   return withRlsContext(actor.id, actor.role, async (tx) => {
-    const before = await tx.asset.findUniqueOrThrow({ where: { id } });
+    const before = await tx.asset.findUnique({ where: { publicCode } });
+    if (!before) throw new DomainError("Asset not found.", 404);
 
     const registeredLocationChanged =
       (input.registeredBuildingId && input.registeredBuildingId !== before.registeredBuildingId) ||
       (input.registeredRoomId && input.registeredRoomId !== before.registeredRoomId);
 
     const asset = await tx.asset.update({
-      where: { id },
+      where: { publicCode },
       data: {
         name: input.name,
         category: input.category,
@@ -117,6 +163,14 @@ export async function updateAsset(
       action: registeredLocationChanged
         ? "ASSET_REGISTERED_LOCATION_CHANGED"
         : "ASSET_UPDATED",
+      metadata: registeredLocationChanged
+        ? {
+            fromBuildingId: before.registeredBuildingId,
+            fromRoomId: before.registeredRoomId,
+            toBuildingId: asset.registeredBuildingId,
+            toRoomId: asset.registeredRoomId,
+          }
+        : undefined,
     });
 
     return asset;
@@ -124,15 +178,37 @@ export async function updateAsset(
 }
 
 /**
- * Sets an asset to RETIRED and stamps retiredAt, per docs/03-database-schema.md
- * #10/#19 — the only route out of DAMAGED/IN_MAINTENANCE/LOST besides AVAILABLE.
- * The pg_cron job (same doc, #19) hard-deletes the row 7 days later.
+ * Statuses an admin may retire directly (docs/06-asset-management.md #16).
+ * IN_USE must be returned first (otherwise the active assignment would be
+ * orphaned when the retention job purges the row), DAMAGED must go through
+ * maintenance, and IN_MAINTENANCE -> RETIRED happens via maintenance
+ * resolution (Week 3), not this action.
  */
-export async function retireAsset(actor: CurrentUser, id: string) {
+export const DIRECTLY_RETIRABLE_STATUSES: AssetStatus[] = ["AVAILABLE", "LOST"];
+
+/**
+ * Sets an asset to RETIRED and stamps retiredAt, per docs/03-database-schema.md
+ * #10/#19. The pg_cron job (same doc, #19) hard-deletes the row 7 days later.
+ */
+export async function retireAsset(actor: CurrentUser, publicCode: string) {
   return withRlsContext(actor.id, actor.role, async (tx) => {
-    const asset = await tx.asset.update({
-      where: { id },
+    // Conditional update so the status check and the write can't race.
+    const { count } = await tx.asset.updateMany({
+      where: { publicCode, status: { in: DIRECTLY_RETIRABLE_STATUSES } },
       data: { status: "RETIRED", retiredAt: new Date() },
+    });
+
+    if (count === 0) {
+      const exists = await tx.asset.findUnique({ where: { publicCode }, select: { id: true } });
+      if (!exists) throw new DomainError("Asset not found.", 404);
+      throw new DomainError(
+        "Only AVAILABLE or LOST assets can be retired directly. Return it or resolve its maintenance first.",
+        409,
+      );
+    }
+
+    const asset = await tx.asset.findUniqueOrThrow({
+      where: { publicCode },
       include: ASSET_INCLUDE,
     });
 

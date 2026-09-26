@@ -1,20 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireUser, requireRole } from "@/lib/auth/session";
 import { handleApiError } from "@/lib/api/errors";
-import { assetCreateSchema } from "@/lib/validation/assets";
+import { assetCreateSchema, parseAssetListQuery } from "@/lib/validation/assets";
 import { listAssets, createAsset } from "@/lib/data/assets";
-import type { AssetStatus } from "@prisma/client";
 
+// Any authenticated user can search/browse (docs/04 #7). Retired assets are
+// hidden unless explicitly filtered for, except for admins.
 export async function GET(req: NextRequest) {
   try {
-    await requireUser();
-    const params = req.nextUrl.searchParams;
-    const result = await listAssets({
-      page: params.has("page") ? Number(params.get("page")) : undefined,
-      pageSize: params.has("pageSize") ? Number(params.get("pageSize")) : undefined,
-      status: (params.get("status") as AssetStatus | null) ?? undefined,
-      q: params.get("q") ?? undefined,
-    });
+    const user = await requireUser();
+    const query = parseAssetListQuery(req.nextUrl.searchParams);
+    const result = await listAssets(user, query, { hideRetired: user.role !== "ADMIN" });
     return NextResponse.json(result);
   } catch (error) {
     return handleApiError(error);

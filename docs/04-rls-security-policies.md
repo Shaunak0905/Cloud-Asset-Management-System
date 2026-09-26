@@ -164,6 +164,30 @@ CREATE POLICY assets_select_all_authenticated ON assets
 
 **Important:** the application's own Prisma connection must use a Postgres role that is itself subject to RLS (i.e., not a superuser and not `BYPASSRLS`) — Postgres superusers and table owners bypass RLS by default. Create a dedicated `app_user` Postgres role for Prisma's connection with `NOSUPERUSER` and without `BYPASSRLS`.
 
+This means **two connection strings** (`.env.example`):
+
+- `DATABASE_URL` — the running app, as `app_user`. Every query, reads included, must run inside `withRlsContext()`; a query with no identity set matches no policy and returns nothing.
+- `DIRECT_DATABASE_URL` — the server admin/table owner. Used only by Prisma Migrate (`directUrl` in `schema.prisma`) and the seed script, since migrations create tables, roles, and the functions below.
+
+# 6a. SECURITY DEFINER Functions
+
+A few operations can't be expressed as ordinary RLS policies. Each is a narrow `SECURITY DEFINER` function (runs as its owner, the table owner, so RLS doesn't filter it), defined in `prisma/migrations/0002_*`:
+
+| Function | Why it can't be a plain policy |
+|---|---|
+| `app_login_user(entra_id, name, email)` | First-login provisioning happens before any RLS identity exists, and `users` deliberately has no INSERT policy. Only ever creates `MEMBER` rows; never changes an existing role. |
+| `get_public_asset(public_code)` | Anonymous visitor; must return only the safe columns (RLS can't restrict columns). |
+| `request_asset(...)` / `return_assignment(id)` | A MEMBER must change the asset's status and usage location, but `assets` UPDATE is admin-only. |
+
+Rules every such function follows:
+
+1. It does exactly one thing and enforces its own invariants (e.g. `request_asset` locks the asset row and rejects anything not `AVAILABLE`).
+2. It takes the caller's identity from `current_setting('app.current_user_id')` — **never from an argument** — so it can't be used to act as someone else.
+3. `SET search_path = public` pins name resolution, so it can't be hijacked by objects in a caller-controlled schema.
+4. `EXECUTE` is revoked from `PUBLIC` and granted only to `app_user`. `purge_retired_assets()` isn't granted to `app_user` at all — only `pg_cron`, running as the owner, calls it.
+
+These functions and the policies in §8 are verified together against a real Postgres instance by executing both migrations and acting as `app_user` (anonymous, MEMBER, ADMIN) — see `14-testing-and-quality-assurance.md` §17A.
+
 ---
 
 # 7. Role Matrix
@@ -252,7 +276,7 @@ CREATE POLICY assets_update_admin_only ON assets
   WITH CHECK (current_setting('app.current_user_role', true) = 'ADMIN');
 ```
 
-(The public QR page bypasses RLS entirely by design — it runs an unauthenticated query through a narrowly-scoped Route Handler function using the application's service role, projecting only safe columns; RLS's `app.current_user_role` is simply unset for that path, so no `SELECT` policy above matches it, and the public Route Handler uses a separate, column-limited query rather than relying on RLS to filter columns — RLS filters rows, not columns.)
+(The public QR page has no RLS identity — the visitor is anonymous — so no `SELECT` policy above matches it and a plain query returns nothing. It reads through the `get_public_asset()` `SECURITY DEFINER` function instead (§6a), which can only ever return the public-safe columns. RLS filters rows, not columns, so the column restriction has to live in that function.)
 
 ## assignments
 

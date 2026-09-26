@@ -821,7 +821,7 @@ Example:
 
 ```text
 AVAILABLE
-ASSIGNED
+IN_USE
 IN MAINTENANCE
 DAMAGED
 LOST
@@ -1149,7 +1149,7 @@ Example:
 
 ```text
 COUNT assets WHERE status = AVAILABLE
-COUNT assets WHERE status = ASSIGNED
+COUNT assets WHERE status = IN_USE
 COUNT assets WHERE status = IN_MAINTENANCE
 ```
 

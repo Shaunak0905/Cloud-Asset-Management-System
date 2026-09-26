@@ -39,7 +39,7 @@ Asset Created
      ↓
 AVAILABLE
      ↓
-ASSIGNED
+IN_USE
      ↓
 RETURNED
      ↓
@@ -63,7 +63,7 @@ AVAILABLE
    ↓
 DAMAGED
 
-AVAILABLE / ASSIGNED
+AVAILABLE / IN_USE
    ↓
 LOST
 
@@ -491,11 +491,11 @@ The UI should make this distinction obvious.
 
 # 15. Asset Status
 
-Use the controlled statuses:
+Use the controlled statuses (matching the `asset_status` enum in `03-database-schema.md` §10 — "in use" is `IN_USE`, deliberately not `ASSIGNED`, which is a maintenance-request status):
 
 ```text
 AVAILABLE
-ASSIGNED
+IN_USE
 IN_MAINTENANCE
 LOST
 DAMAGED
@@ -514,13 +514,13 @@ Recommended transitions:
 
 ```text
 AVAILABLE
-   ├──→ ASSIGNED
+   ├──→ IN_USE
    ├──→ IN_MAINTENANCE   (a reported problem takes the asset out of service)
    ├──→ DAMAGED
    ├──→ LOST
    └──→ RETIRED
 
-ASSIGNED
+IN_USE
    ├──→ AVAILABLE
    ├──→ IN_MAINTENANCE
    ├──→ LOST
@@ -1170,7 +1170,7 @@ Assign Asset
 should wait for server/database confirmation before showing:
 
 ```text
-ASSIGNED
+IN_USE
 ```
 
 This prevents UI/database disagreement.

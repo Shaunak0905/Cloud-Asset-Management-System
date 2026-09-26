@@ -9,9 +9,12 @@ import { auth } from "@/lib/auth/auth";
 //
 // Next.js 16 renamed the "middleware" file convention to "proxy" — same
 // runtime, same export shape, new filename.
+// Note "/assets" (authenticated browse/detail) vs "/asset/<code>" (the public
+// QR page) — the latter is deliberately not listed.
 const PROTECTED_PREFIXES = [
   "/dashboard",
   "/assets",
+  "/assignments",
   "/maintenance",
   "/admin",
   "/technician",
@@ -31,5 +34,12 @@ export default auth((req) => {
 });
 
 export const config = {
-  matcher: ["/dashboard/:path*", "/assets/:path*", "/maintenance/:path*", "/admin/:path*", "/technician/:path*"],
+  matcher: [
+    "/dashboard/:path*",
+    "/assets/:path*",
+    "/assignments/:path*",
+    "/maintenance/:path*",
+    "/admin/:path*",
+    "/technician/:path*",
+  ],
 };

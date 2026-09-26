@@ -290,6 +290,7 @@ CREATE TABLE assignments (
   usage_room_id           uuid REFERENCES rooms(id) ON DELETE SET NULL,
 
   requested_at            timestamptz NOT NULL DEFAULT now(),
+  expected_return_at      timestamptz,           -- optional; drives "overdue" (docs/12)
   approved_at             timestamptz,
   approved_by             uuid REFERENCES users(id) ON DELETE RESTRICT,
   returned_at             timestamptz,
@@ -321,16 +322,22 @@ When an assignment goes `ACTIVE`, the Route Handler transaction should also set 
 
 # 13. Assignment Integrity
 
-Creating an assignment, inside one Postgres transaction:
+**MVP decision: requests are self-service and auto-approved** — the assignment is `ACTIVE` immediately. `PENDING`/`REJECTED` stay in the enum for a future approval flow.
 
-1. Verify asset exists and `status = 'AVAILABLE'`.
-2. Verify requesting user `is_active`.
-3. Verify usage room belongs to usage building (FK-enforced, but validate the pair explicitly for a clean error message).
-4. Insert the `assignments` row with `status = 'PENDING'` (or `'ACTIVE'` if requests are auto-approved for the MVP — see `08-maintenance-system.md`/product requirements for the approval flow decision).
-5. On approval: update `assets.status`/usage columns and the assignment row together.
-6. Write an `audit_log` entry.
+Creating an assignment, inside one Postgres transaction (implemented by the `request_asset()` function, `prisma/migrations/0002_*`):
 
-Because this is a real transaction, steps 4–6 either all commit or all roll back — there is no partial-write state to reconcile, and no idempotency-key scaffolding is required to make retries safe (a retried request either succeeds once or fails the unique-active-assignment constraint).
+1. Verify requesting user `is_active`.
+2. Lock the asset row (`SELECT ... FOR UPDATE`) and verify `status = 'AVAILABLE'`.
+3. Verify usage room belongs to usage building (FK-enforced, but validated as a pair for a clean error).
+4. Insert the `assignments` row with `status = 'ACTIVE'` and the name/public-code snapshots.
+5. Set `assets.status = 'IN_USE'` and the current-usage columns.
+6. Write an `audit_log` entry (`ASSET_ASSIGNED`, from the app, same transaction).
+
+Returning (`return_assignment()`) is allowed for the assignee or an ADMIN; it marks the assignment `RETURNED`, always clears the usage columns, and sets the asset back to `AVAILABLE` **only if it is still `IN_USE`** — an asset that went into maintenance or was reported lost while checked out must not silently return to circulation.
+
+Why these live in `SECURITY DEFINER` functions rather than Prisma calls: a MEMBER must update the asset's status, but `assets` UPDATE is admin-only under RLS. See `04-rls-security-policies.md` §6a.
+
+Because this is a real transaction, the steps either all commit or all roll back — there is no partial-write state to reconcile, and no idempotency-key scaffolding is required to make retries safe (a retried request either succeeds once or fails with "not available").
 
 ---
 

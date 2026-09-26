@@ -4,7 +4,11 @@ import type { AppRole } from "@/lib/auth/types";
 
 type NavItem = { href: string; label: string };
 
-const BASE_NAV: NavItem[] = [{ href: "/dashboard", label: "Dashboard" }];
+const BASE_NAV: NavItem[] = [
+  { href: "/dashboard", label: "Dashboard" },
+  { href: "/assets", label: "Browse assets" },
+  { href: "/assignments", label: "My assignments" },
+];
 
 const ADMIN_NAV: NavItem[] = [
   { href: "/admin/buildings", label: "Buildings & Rooms" },
@@ -21,7 +25,7 @@ export function Sidebar({
   const navItems = role === "ADMIN" ? [...BASE_NAV, ...ADMIN_NAV] : BASE_NAV;
 
   return (
-    <aside className="flex w-full shrink-0 flex-col border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:h-screen md:w-60 md:border-r">
+    <aside className="flex w-full shrink-0 flex-col border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-950 md:h-screen md:w-60 md:border-r print:hidden">
       <div className="border-b border-zinc-200 px-5 py-4 dark:border-zinc-800">
         <span className="text-sm font-semibold text-zinc-950 dark:text-zinc-50">
           Campus Asset Mgmt

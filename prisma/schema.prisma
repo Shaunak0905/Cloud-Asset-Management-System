@@ -12,9 +12,14 @@ generator client {
   provider = "prisma-client-js"
 }
 
+// DATABASE_URL is the runtime connection as the RLS-subject `app_user` role.
+// DIRECT_DATABASE_URL is the owner/admin connection Prisma Migrate (and the
+// seed script) use — migrations create tables, roles and SECURITY DEFINER
+// functions, which the RLS-subject role cannot and should not be able to do.
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_DATABASE_URL")
 }
 
 enum UserRole {
@@ -177,6 +182,7 @@ model Assignment {
   usageRoomId              String?          @map("usage_room_id") @db.Uuid
 
   requestedAt              DateTime         @default(now()) @map("requested_at") @db.Timestamptz
+  expectedReturnAt         DateTime?        @map("expected_return_at") @db.Timestamptz
   approvedAt               DateTime?        @map("approved_at") @db.Timestamptz
   approvedBy                String?         @map("approved_by") @db.Uuid
   returnedAt                DateTime?       @map("returned_at") @db.Timestamptz

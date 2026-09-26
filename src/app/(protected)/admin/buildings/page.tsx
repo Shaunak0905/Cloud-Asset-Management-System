@@ -1,14 +1,11 @@
-import { redirect } from "next/navigation";
-import { auth } from "@/lib/auth/auth";
+import { requirePageUser } from "@/lib/auth/session";
 import { listBuildingsWithRooms } from "@/lib/data/buildings";
 import { CreateBuildingForm } from "@/components/locations/CreateBuildingForm";
 import { CreateRoomForm } from "@/components/locations/CreateRoomForm";
 
 export default async function AdminBuildingsPage() {
-  const session = await auth();
-  if (session?.user?.role !== "ADMIN") redirect("/dashboard");
-
-  const buildings = await listBuildingsWithRooms();
+  const user = await requirePageUser(["ADMIN"]);
+  const buildings = await listBuildingsWithRooms(user);
 
   return (
     <div className="p-6">

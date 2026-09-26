@@ -834,7 +834,7 @@ assets.status = AVAILABLE
 ### Assigned
 
 ```text
-assets.status = ASSIGNED
+assets.status = IN_USE
 ```
 
 ### In Maintenance
